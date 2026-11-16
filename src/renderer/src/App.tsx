@@ -74,6 +74,16 @@ export default function App() {
     setQuestion('')
     setAnswer('')
     setElapsed(0)
+
+    // 系统声音必须走转写接口，没有地址就不要假装能录：直接提示，避免录完才报错。
+    if (settings.audioSource === 'system' && !settings.sttBaseUrl.trim()) {
+      setStatus('error')
+      setError(
+        '系统声音需要转写服务：MiniMax 没有语音识别接口。请在设置里填写兼容 Whisper 的转写地址，或把收声来源改成麦克风。'
+      )
+      return
+    }
+
     setStatus('recording')
     recordingRef.current = true
     startedAtRef.current = Date.now()
@@ -92,7 +102,7 @@ export default function App() {
       setStatus('error')
       setError(err instanceof Error ? err.message : '无法开始收声')
     }
-  }, [settings.audioSource, settings.sttMode])
+  }, [settings.audioSource, settings.sttBaseUrl, settings.sttMode])
 
   const stopAndAnswer = useCallback(async () => {
     if (busyRef.current) return
@@ -140,10 +150,13 @@ export default function App() {
       }
 
       if (!nextQuestion) {
+        const speechFailure = speechRef.current.failureReason
         throw new Error(
           settings.audioSource === 'system'
             ? '系统声音需要转写服务。MiniMax 没有语音识别接口，请改用麦克风，或填写兼容 Whisper 的转写地址。'
-            : '没有识别到内容。请靠近麦克风外放会议声音，并允许麦克风权限。'
+            : speechFailure
+              ? `浏览器语音识别失败（${speechFailure}），Electron 未内置语音识别服务。请在设置里填写兼容 Whisper 的转写地址。`
+              : '没有识别到内容。请靠近麦克风外放会议声音，并允许麦克风权限。'
         )
       }
 

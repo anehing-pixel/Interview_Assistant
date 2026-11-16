@@ -18,6 +18,12 @@ export class LiveSpeech {
   private recognition: SpeechRecognition | null = null
   private finalText = ''
   private latestText = ''
+  private failure = ''
+
+  /** 最近一次识别失败的原因（如 network / not-allowed），用于给出可读提示。 */
+  get failureReason(): string {
+    return this.failure
+  }
 
   start(onUpdate: (text: string) => void): boolean {
     const Ctor = getSpeechCtor()
@@ -25,6 +31,7 @@ export class LiveSpeech {
 
     this.finalText = ''
     this.latestText = ''
+    this.failure = ''
     const recognition = new Ctor()
     this.recognition = recognition
     recognition.lang = 'zh-CN'
@@ -45,8 +52,9 @@ export class LiveSpeech {
       onUpdate(this.latestText)
     }
 
-    recognition.onerror = () => {
-      // Keep whatever text we already collected.
+    recognition.onerror = (event) => {
+      // 记录失败原因，保留已经拿到的文本。
+      this.failure = event?.error || 'unknown'
     }
 
     try {

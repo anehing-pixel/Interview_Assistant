@@ -43,6 +43,13 @@ export function minimaxBaseUrl(region: Region): string {
   return region === 'global' ? 'https://api.minimax.io/v1' : 'https://api.minimaxi.com/v1'
 }
 
+/** MiniMax 官方语音识别（asr-1.0）端点；国内按官方文档用 minimax.cn，同时兼容旧域名。 */
+export function minimaxAsrBaseUrls(region: Region): string[] {
+  return region === 'global'
+    ? ['https://api.minimax.io/v1']
+    : ['https://api.minimax.cn/v1', 'https://api.minimaxi.com/v1']
+}
+
 export function formatHotkey(accelerator: string): string {
   return accelerator
     .replaceAll('CommandOrControl', 'Ctrl')

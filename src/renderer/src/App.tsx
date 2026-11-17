@@ -75,15 +75,6 @@ export default function App() {
     setAnswer('')
     setElapsed(0)
 
-    // 系统声音必须走转写接口，没有地址就不要假装能录：直接提示，避免录完才报错。
-    if (settings.audioSource === 'system' && !settings.sttBaseUrl.trim()) {
-      setStatus('error')
-      setError(
-        '系统声音需要转写服务：MiniMax 没有语音识别接口。请在设置里填写兼容 Whisper 的转写地址，或把收声来源改成麦克风。'
-      )
-      return
-    }
-
     setStatus('recording')
     recordingRef.current = true
     startedAtRef.current = Date.now()
@@ -102,7 +93,7 @@ export default function App() {
       setStatus('error')
       setError(err instanceof Error ? err.message : '无法开始收声')
     }
-  }, [settings.audioSource, settings.sttBaseUrl, settings.sttMode])
+  }, [settings.audioSource, settings.sttMode])
 
   const stopAndAnswer = useCallback(async () => {
     if (busyRef.current) return
@@ -113,10 +104,12 @@ export default function App() {
     const liveText = await speechRef.current.stop()
     let wav: ArrayBuffer
     let durationMs = 0
+    let peakLevel = 0
     try {
       const recorded = recorderRef.current.stop()
       wav = recorded.wav
       durationMs = recorded.durationMs
+      peakLevel = recorded.peakLevel
     } catch (err) {
       busyRef.current = false
       setStatus('error')
@@ -131,12 +124,27 @@ export default function App() {
       return
     }
 
+    // 电平几乎为零说明这一路音频根本没抓到，送去转写只会得到空文本，先拦下来给可操作提示。
+    if (peakLevel < 0.01) {
+      busyRef.current = false
+      setStatus('error')
+      setError(
+        settings.audioSource === 'system'
+          ? '没有捕获到系统声音（音频是静音的）。请确认会议正在外放音频；系统声音需在弹出的共享窗口里勾选“共享音频/分享系统声音”。若仍抓不到，请改用“麦克风”并外放会议声音。'
+          : '没有捕获到麦克风声音。请确认麦克风已授权、没有静音，并尽量靠近声源；也可以外放会议声音让麦克风接收。'
+      )
+      return
+    }
+
     try {
       let nextQuestion = liveText
-      const canUseCloudStt = Boolean(settings.sttBaseUrl.trim()) && settings.sttMode !== 'speech-api'
+      // 系统声音本来就没有实时语音识别，一定走转写；麦克风仅在“仅浏览器识别”模式下不回退。
+      const liveOnly = settings.audioSource === 'microphone' && settings.sttMode === 'speech-api'
       const needCloudStt =
-        canUseCloudStt &&
-        (settings.sttMode === 'whisper' || settings.audioSource === 'system' || !nextQuestion)
+        !liveOnly &&
+        (settings.audioSource === 'system' ||
+          settings.sttMode === 'whisper' ||
+          !nextQuestion.trim())
 
       if (needCloudStt) {
         setStatus('transcribing')
@@ -153,9 +161,9 @@ export default function App() {
         const speechFailure = speechRef.current.failureReason
         throw new Error(
           settings.audioSource === 'system'
-            ? '系统声音需要转写服务。MiniMax 没有语音识别接口，请改用麦克风，或填写兼容 Whisper 的转写地址。'
+            ? '没有从系统声音中识别出内容。请确认会议正在外放音频，且 API Key 已开通语音识别（asr-1.0）。'
             : speechFailure
-              ? `浏览器语音识别失败（${speechFailure}），Electron 未内置语音识别服务。请在设置里填写兼容 Whisper 的转写地址。`
+              ? `浏览器语音识别失败（${speechFailure}）。可把语音识别改成“自动”，改用 MiniMax 语音识别。`
               : '没有识别到内容。请靠近麦克风外放会议声音，并允许麦克风权限。'
         )
       }
@@ -176,7 +184,7 @@ export default function App() {
     } finally {
       busyRef.current = false
     }
-  }, [settings.audioSource, settings.sttBaseUrl, settings.sttMode])
+  }, [settings.audioSource, settings.sttMode])
 
   const toggleListening = useCallback(() => {
     if (recordingRef.current) {
@@ -211,7 +219,7 @@ export default function App() {
     return (
       <div className="shell">
         <div className="titlebar">
-          <span>面试助手</span>
+          <span>test</span>
         </div>
         <div className="empty">正在加载…</div>
       </div>
@@ -224,7 +232,7 @@ export default function App() {
         <div className="brand">
           <span className="logo">面</span>
           <div>
-            <strong>面试助手</strong>
+            <strong>test</strong>
             <small>MiniMax</small>
           </div>
         </div>
@@ -362,19 +370,19 @@ export default function App() {
             >
               <option value="auto">自动（麦克风实时识别，失败再转写）</option>
               <option value="speech-api">仅浏览器语音识别</option>
-              <option value="whisper">音频转写接口</option>
+              <option value="whisper">强制音频转写（MiniMax / 自定义）</option>
             </select>
           </label>
           <label>
-            转写 Base URL（可选）
+            自定义转写地址（可选）
             <input
               value={settings.sttBaseUrl}
-              placeholder="MiniMax 无此接口；可选填兼容 Whisper 的地址"
+              placeholder="留空即用 MiniMax 语音识别；也可填 Whisper 兼容地址"
               onChange={(event) => setSettings({ ...settings, sttBaseUrl: event.target.value })}
             />
           </label>
           <label>
-            转写模型
+            自定义转写模型（仅填了上面的地址时生效）
             <input
               value={settings.sttModel}
               onChange={(event) => setSettings({ ...settings, sttModel: event.target.value })}
@@ -395,7 +403,7 @@ export default function App() {
           </label>
           {hotkeyHint ? <p className="hint warn">{hotkeyHint}</p> : null}
           <p className="hint">
-            答题使用 MiniMax。语音识别默认走麦克风实时转写；MiniMax 没有官方语音识别接口。
+            答题和语音识别共用同一个 MiniMax Key。系统声音默认走 MiniMax 官方语音识别（asr-1.0，需付费账号）；自定义地址留空即可。
           </p>
           <button type="button" className="primary" onClick={() => void saveCurrentSettings()}>
             保存

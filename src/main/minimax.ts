@@ -1,4 +1,4 @@
-import { minimaxBaseUrl, type AppSettings } from '../shared/types'
+import { minimaxAsrBaseUrls, minimaxBaseUrl, type AppSettings } from '../shared/types'
 
 const SYSTEM_PROMPT = `你是面试答题助手。根据面试官口述转写出来的问题，给出候选人可以当场扫读或口述的中文答案。
 
@@ -40,29 +40,42 @@ async function readErrorMessage(response: Response): Promise<string> {
   }
 }
 
-export async function transcribeAudio(params: {
+type TranscribeParams = {
   settings: AppSettings
   audio: Buffer
   filename: string
   mimeType: string
   signal?: AbortSignal
-}): Promise<string> {
-  const { settings, audio, filename, mimeType, signal } = params
-  const sttBase = settings.sttBaseUrl.trim()
-  if (!sttBase) {
-    throw new Error(
-      'MiniMax 没有语音识别接口。请用麦克风收声，或在设置里填写兼容 Whisper 的转写地址。'
-    )
-  }
+}
+
+function audioBlob(params: TranscribeParams): Blob {
+  return new Blob([new Uint8Array(params.audio)], { type: params.mimeType })
+}
+
+/**
+ * 转写入口：默认走 MiniMax 官方语音识别（asr-1.0），同一个 API Key 即可。
+ * 若用户在设置里填了自定义地址，则改用 Whisper 兼容接口覆盖。
+ */
+export async function transcribeAudio(params: TranscribeParams): Promise<string> {
+  const { settings } = params
   if (!settings.apiKey.trim()) {
     throw new Error('请先在设置中填写 API Key')
   }
+  const customBase = settings.sttBaseUrl.trim()
+  return customBase
+    ? transcribeWithWhisper(customBase, params)
+    : transcribeWithMinimax(params)
+}
+
+/** 用户自建 / 第三方 Whisper 兼容服务：POST {base}/audio/transcriptions */
+async function transcribeWithWhisper(base: string, params: TranscribeParams): Promise<string> {
+  const { settings, filename, signal } = params
   const form = new FormData()
-  form.append('file', new Blob([new Uint8Array(audio)], { type: mimeType }), filename)
+  form.append('file', audioBlob(params), filename)
   form.append('model', settings.sttModel.trim() || 'whisper-1')
   form.append('language', 'zh')
 
-  const response = await fetch(joinBase(sttBase, '/audio/transcriptions'), {
+  const response = await fetch(joinBase(base, '/audio/transcriptions'), {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${settings.apiKey.trim()}`
@@ -72,13 +85,64 @@ export async function transcribeAudio(params: {
   })
 
   if (!response.ok) {
-    throw new Error(`语音识别失败：${await readErrorMessage(response)}`)
+    throw new Error(`自定义转写失败：${await readErrorMessage(response)}`)
   }
 
   const json = (await response.json()) as { text?: string }
   const text = json.text?.trim()
-  if (!text) throw new Error('语音识别没有返回文本')
+  if (!text) throw new Error('自定义转写没有返回文本')
   return text
+}
+
+/** MiniMax 官方语音识别：POST /v1/speech_to_text，multipart/form-data，model=asr-1.0。 */
+async function transcribeWithMinimax(params: TranscribeParams): Promise<string> {
+  const { settings, filename, signal } = params
+  const apiKey = settings.apiKey.trim()
+  let lastError = ''
+
+  for (const base of minimaxAsrBaseUrls(settings.region)) {
+    const form = new FormData()
+    form.append('model', 'asr-1.0')
+    form.append('file', audioBlob(params), filename)
+    form.append('response_format', 'json')
+    form.append('stream', 'false')
+
+    let response: Response
+    try {
+      response = await fetch(joinBase(base, '/speech_to_text'), {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          language: 'zh'
+        },
+        body: form,
+        signal
+      })
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') throw err
+      lastError = err instanceof Error ? err.message : '网络请求失败'
+      continue
+    }
+
+    if (response.ok) {
+      const json = (await response.json()) as { text?: string }
+      const text = json.text?.trim()
+      if (text) return text
+      // HTTP 200 但 text 为空：接口正常，通常是这段音频里没有可识别的人声。
+      lastError = '这段音频里没有识别出文字，请确认录到的是清晰的人声提问，而不是静音或音乐'
+      continue
+    }
+
+    const message = await readErrorMessage(response)
+    // 域名或鉴权体系不匹配时试下一个候选；欠费、限流、参数错误直接反馈给用户。
+    if ([401, 403, 404].includes(response.status)) {
+      lastError = message
+      continue
+    }
+    throw new Error(`MiniMax 语音识别失败：${message}`)
+  }
+
+  throw new Error(`MiniMax 语音识别失败：${lastError || '未知错误'}`)
 }
 
 export async function streamAnswer(params: {

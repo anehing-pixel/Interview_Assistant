@@ -39,10 +39,11 @@ npm run dist
 
 ## 语音识别说明
 
-MiniMax 目前没有公开的语音识别接口，答题走 MiniMax Chat Completions。
+答题走 MiniMax Chat Completions，语音识别默认走 MiniMax 官方接口（`asr-1.0`，`POST /v1/speech_to_text`），两者共用同一个 API Key。**语音识别需要付费账号，免费 Key 不可用。**
 
-- **麦克风 + 自动**：优先用浏览器中文语音识别，失败再走转写接口
-- **系统声音**：必须走转写接口。若 MiniMax 的 `/v1/audio/transcriptions` 不可用，在设置里填写兼容 Whisper 的转写 Base URL（例如其他国内 ASR 网关），模型名按该服务填写
+- **系统声音**：直接走 MiniMax 语音识别，无需额外配置（耳机开会推荐）
+- **麦克风 + 自动**：有浏览器中文语音识别时优先用实时识别，失败再回退到 MiniMax 语音识别
+- **自定义转写**：要用自建或第三方 Whisper 兼容服务时，在设置里填「自定义转写地址」，会覆盖默认的 MiniMax 语音识别
 
 ## 快捷键
 

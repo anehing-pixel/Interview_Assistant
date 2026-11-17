@@ -73,6 +73,7 @@ export class AudioRecorder {
   private processor: ScriptProcessorNode | null = null
   private analyser: AnalyserNode | null = null
   private chunks: Float32Array[] = []
+  private levels: number[] = []
   private raf = 0
 
   async start(
@@ -80,6 +81,7 @@ export class AudioRecorder {
     onLevel: (level: number) => void
   ): Promise<void> {
     this.chunks = []
+    this.levels = []
     this.stream = await captureAudioStream(source)
     const context = new AudioContext({ sampleRate: 16000 })
     this.context = context
@@ -111,13 +113,15 @@ export class AudioRecorder {
         const centered = (value - 128) / 128
         sum += centered * centered
       }
-      onLevel(Math.sqrt(sum / data.length))
+      const level = Math.sqrt(sum / data.length)
+      this.levels.push(level)
+      onLevel(level)
       this.raf = requestAnimationFrame(tick)
     }
     tick()
   }
 
-  stop(): { wav: ArrayBuffer; durationMs: number } {
+  stop(): { wav: ArrayBuffer; durationMs: number; peakLevel: number; avgLevel: number } {
     cancelAnimationFrame(this.raf)
     this.processor?.disconnect()
     this.analyser?.disconnect()
@@ -138,9 +142,18 @@ export class AudioRecorder {
       offset += chunk.length
     }
     this.chunks = []
+
+    const peakLevel = this.levels.reduce((max, value) => Math.max(max, value), 0)
+    const avgLevel = this.levels.length
+      ? this.levels.reduce((sum, value) => sum + value, 0) / this.levels.length
+      : 0
+    this.levels = []
+
     return {
       wav: encodeWav(samples, sampleRate),
-      durationMs: (length / sampleRate) * 1000
+      durationMs: (length / sampleRate) * 1000,
+      peakLevel,
+      avgLevel
     }
   }
 }
